@@ -148,7 +148,8 @@ namespace ARMClient
                         || String.Equals(verb, "delete", StringComparison.OrdinalIgnoreCase)
                         || String.Equals(verb, "put", StringComparison.OrdinalIgnoreCase)
                         || String.Equals(verb, "post", StringComparison.OrdinalIgnoreCase)
-                        || String.Equals(verb, "patch", StringComparison.OrdinalIgnoreCase))
+                        || String.Equals(verb, "patch", StringComparison.OrdinalIgnoreCase)
+                        || String.Equals(verb, "listmappings", StringComparison.OrdinalIgnoreCase))
                     {
                         var path = _parameters.Get(1, keyName: "url");
                         var verbose = _parameters.Get("-verbose", requires: false) != null || Utils.GetDefaultVerbose();
@@ -177,6 +178,9 @@ namespace ARMClient
 
                         var subscriptionId = GetTenantOrSubscription(uri);
                         TokenCacheInfo cacheInfo = persistentAuthHelper.GetToken(subscriptionId).Result;
+                        if (String.Equals(verb, "listmappings", StringComparison.OrdinalIgnoreCase))
+                        return ListMappings(uri, cacheInfo, verb, verbose, content, headers).Result;
+
                         return HttpInvoke(uri, cacheInfo, verb, verbose, content, headers).Result;
                     }
                     else
@@ -299,7 +303,7 @@ namespace ARMClient
 
             Console.WriteLine();
             Console.WriteLine("Call ARM api");
-            Console.WriteLine("    ARMClient.exe [get|post|put|patch|delete] [url] (<@file|content>) (-h \"header: value\") (-verbose)");
+            Console.WriteLine("    ARMClient.exe [get|post|put|patch|delete|listmappings] [url] (<@file|content>) (-h \"header: value\") (-verbose)");
             Console.WriteLine("    Use '-h' multiple times to add more than one custom HTTP header.");
 
             Console.WriteLine();
@@ -322,6 +326,7 @@ namespace ARMClient
             Console.WriteLine();
             Console.WriteLine("Clear token cache");
             Console.WriteLine("    ARMClient.exe clearcache");
+
         }
 
         static HttpContent ParseHttpContent(string verb, CommandLineParameters parameters)
@@ -357,6 +362,43 @@ namespace ARMClient
         {
             var logginerHandler = new HttpLoggingHandler(new HttpClientHandler(), verbose);
             return await Utils.HttpInvoke(uri, cacheInfo, verb, logginerHandler, content, headers);
+        }
+        static async Task<int> ListMappings(Uri uri, TokenCacheInfo cacheInfo, string verb, bool verbose, HttpContent content, Dictionary<string, List<string>> headers)
+        {
+            var instances= await Utils.HttpGet(new UriBuilder(uri.ToString() + "/instances?api-version=2015-02-01").Uri , cacheInfo);
+            //System.Diagnostics.Debugger.Launch();
+            var affinityIds = instances.Value<JArray>("value");
+            var siteName =  uri.Segments[uri.Segments.Length -1];
+            foreach (dynamic affinityId in affinityIds)
+            {
+                try
+                {
+                    Console.WriteLine($"Pinging Instance: {affinityId?.name}");
+                    var response = await Utils.GetFromInstance(
+                                new UriBuilder($"https://{siteName}.scm.azurewebsites.net/Env.cshtml").Uri,
+                                affinityId?.name.ToString(), cacheInfo);
+                    printMachineName(response);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error getting machine name: {ex.ToString()}");
+                }
+            }
+            return 1;
+        }
+
+        static void printMachineName(string response)
+        {
+
+            var lines = response.Split(new[] { '\r', '\n' });
+            foreach (var line in lines)
+            {
+                if (line.Contains("<li>Machine name:"))
+                {
+                    Console.WriteLine(line);
+                    return;
+                }
+            }
         }
 
         //http://stackoverflow.com/questions/4810841/how-can-i-pretty-print-json-using-javascript

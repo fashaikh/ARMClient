@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -170,6 +171,74 @@ namespace ARMClient.Authentication.Utilities
             }
         }
 
+        public static async Task<dynamic> HttpInvokeDynamic(Uri uri, TokenCacheInfo cacheInfo, string verb, DelegatingHandler handler, HttpContent content, Dictionary<string, List<string>> headers = null)
+        {
+            using (var client = new HttpClient(handler))
+            {
+                client.DefaultRequestHeaders.Add("Authorization", cacheInfo.CreateAuthorizationHeader(), headers);
+                client.DefaultRequestHeaders.Add("User-Agent", Constants.UserAgent.Value, headers);
+                client.DefaultRequestHeaders.Add("Accept", Constants.JsonContentType, headers);
+
+                if (Utils.IsRdfe(uri))
+                {
+                    client.DefaultRequestHeaders.Add("x-ms-version", "2013-10-01", headers);
+                }
+
+                if (Utils.IsCSM(uri))
+                {
+                    var stamp = GetDefaultStamp();
+                    if (!String.IsNullOrEmpty(stamp))
+                    {
+                        client.DefaultRequestHeaders.Add("x-geoproxy-stamp", stamp, headers);
+                    }
+
+                    var stampCert = GetDefaultStampCert();
+                    if (!String.IsNullOrEmpty(stampCert))
+                    {
+                        client.DefaultRequestHeaders.Add("x-geoproxy-stampcert", stampCert, headers);
+                    }
+                }
+
+                client.DefaultRequestHeaders.Add("x-ms-request-id", Guid.NewGuid().ToString(), headers);
+
+                client.DefaultRequestHeaders.AddRemainingHeaders(headers);
+
+                HttpResponseMessage response = null;
+                if (String.Equals(verb, "get", StringComparison.OrdinalIgnoreCase))
+                {
+                    response = await client.GetAsync(uri);
+                }
+                else if (String.Equals(verb, "delete", StringComparison.OrdinalIgnoreCase))
+                {
+                    response = await client.DeleteAsync(uri);
+                }
+                else if (String.Equals(verb, "post", StringComparison.OrdinalIgnoreCase))
+                {
+                    response = await client.PostAsync(uri, content);
+                }
+                else if (String.Equals(verb, "put", StringComparison.OrdinalIgnoreCase))
+                {
+                    response = await client.PutAsync(uri, content);
+                }
+                else if (String.Equals(verb, "patch", StringComparison.OrdinalIgnoreCase))
+                {
+                    using (var message = new HttpRequestMessage(new HttpMethod("PATCH"), uri))
+                    {
+                        message.Content = content;
+                        response = await client.SendAsync(message).ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    throw new InvalidOperationException(String.Format("Invalid http verb {0}!", verb));
+                }
+                using (response.Content)
+                {
+                    var responseObj = await response.Content.ReadAsAsync<object>();
+                    return responseObj;
+                }
+            }
+        }
         private static void Add(this HttpRequestHeaders requestHeaders, string name, string value, Dictionary<string, List<string>> headers)
         {
             List<string> values;
@@ -195,7 +264,33 @@ namespace ARMClient.Authentication.Utilities
                 headers.Clear();
             }
         }
+        //http://blog.amitapple.com/post/2014/03/access-specific-instance/
+        public static async Task<string> GetFromInstance(Uri url, string instanceId, TokenCacheInfo cacheInfo, int timeOutinSeconds = 60)
+        {
+            var cookieContainer = new CookieContainer();
+            using (var handler = new HttpClientHandler() { CookieContainer = cookieContainer })
+            {
+                using (var httpClient = new HttpClient(handler))
+                {
+                    httpClient.Timeout = new TimeSpan(0, 0, 0, timeOutinSeconds);
+                    httpClient.DefaultRequestHeaders.Add("Authorization", cacheInfo.CreateAuthorizationHeader());
+                    httpClient.DefaultRequestHeaders.Add("User-Agent", Constants.UserAgent.Value);
 
+                    cookieContainer.Add(url, new Cookie("ARRAffinity", instanceId));
+                    var response = await httpClient.GetAsync(url);
+                    {
+                        var content = await response.Content.ReadAsStringAsync();
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            Trace.WriteLine("Status:  " + response.StatusCode);
+                            Trace.WriteLine("Content: " + content);
+                        }
+                        response.EnsureSuccessStatusCode();
+                        return content;
+                    }
+                }
+            }
+        }
         public static async Task<JObject> HttpGet(Uri uri, TokenCacheInfo cacheInfo)
         {
             using (var client = new HttpClient())
